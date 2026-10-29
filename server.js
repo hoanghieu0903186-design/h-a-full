@@ -71,10 +71,13 @@ app.use((req, res, next) => {
 });
 app.use(express.json({ limit: "4kb" }));
 
+/* Phục vụ file tĩnh từ thư mục gốc */
+app.use(express.static(__dirname));
+
 for (const [url, file] of Object.entries(STATIC_FILES)) {
   app.get(url, (req, res) => {
     res.set("Cache-Control", "no-cache");
-    res.sendFile(path.join(__dirname, file));
+    res.sendFile(path.resolve(__dirname, file));
   });
 }
 
@@ -136,7 +139,7 @@ app.post("/api/session", async (req, res) => {
   }
 });
 
-/* Chuyển tiếp RPC. Đã cập nhật gửi apikey bằng SUPABASE_SERVICE_ROLE_KEY để tương thích API keys mới */
+/* Chuyển tiếp RPC. */
 app.post("/api/rpc/:fn", async (req, res) => {
   const fn = req.params.fn;
   if (!RPC.has(fn)) return fail(res, 404, "Hàm không tồn tại");
