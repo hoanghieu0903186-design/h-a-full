@@ -1,15 +1,10 @@
-/* GIẢI MÃ BẢN ĐỒ NGUYÊN TỐ - Backend Express & Static Server cho Vercel */
+/* GIẢI MÃ BẢN ĐỒ NGUYÊN TỐ - Backend Express API cho Vercel */
 import dotenv from "dotenv";
 dotenv.config();
 
-import path from "path";
 import crypto from "crypto";
 import express from "express";
 import { createClient } from "@supabase/supabase-js";
-import { fileURLToPath } from "url";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 /* ===== Cấu hình ===== */
 const PORT = Number(process.env.PORT) || 3000;
@@ -32,9 +27,6 @@ const app = express();
 app.disable("x-powered-by");
 app.set("trust proxy", 1);
 app.use(express.json({ limit: "4kb" }));
-
-/* Serve các file tĩnh */
-app.use(express.static(__dirname));
 
 function bearer(req) {
   const m = /^Bearer\s+(\S+)$/.exec(req.headers.authorization || "");
@@ -87,13 +79,7 @@ app.post("/api/rpc/:fn", async (req, res) => {
   } catch (e) { fail(res, 502, e.message); }
 });
 
-/* Trả về index.html cho tất cả các request trang web */
-app.get("*", (req, res) => {
-  if (req.path.startsWith("/api/")) {
-    return fail(res, 404, "Không tìm thấy API");
-  }
-  res.sendFile(path.join(__dirname, "index.html"));
-});
+app.use("/api/*", (req, res) => fail(res, 404, "Không tìm thấy API"));
 
 export default app;
 
