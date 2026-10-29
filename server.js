@@ -1,4 +1,4 @@
-/* GIẢI MÃ BẢN ĐỒ NGUYÊN TỐ - Backend Express API cho Vercel */
+/* GIẢI MÃ BẢN ĐỒ NGUYÊN TỐ - Backend Express API tương thích API Key mới */
 import dotenv from "dotenv";
 dotenv.config();
 
@@ -10,29 +10,23 @@ import { createClient } from "@supabase/supabase-js";
 const PORT = Number(process.env.PORT) || 3000;
 const SUPABASE_URL = (process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || "").replace(/\/+$/, "");
 const SUPABASE_ANON_KEY = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || "";
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || SUPABASE_ANON_KEY;
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY || SUPABASE_ANON_KEY;
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-  auth: { persistSession: false }
+if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+  console.error("Thiếu cấu hình Supabase URL hoặc API Key trong .env");
+}
+
+/* Khởi tạo Supabase Admin Client bằng SDK chính thức để tự động xử lý API Key mới */
+const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+  auth: { persistSession: false, autoRefreshToken: false }
 });
 
-const RPC = new Map([
-  ["create_room", false], ["join_room", true], ["remove_player", true], ["check_round_set", false],
-  ["start_round", true], ["advance_phase", true], ["end_round", true], ["set_correction", true],
-  ["use_hint", true], ["submit_answer", true], ["correct_answer", true], ["new_round", true],
-  ["list_rounds", false], ["get_state", false]
+const RPC = new Set([
+  "create_room", "join_room", "remove_player", "check_round_set",
+  "start_round", "advance_phase", "end_round", "set_correction",
+  "use_hint", "submit_answer", "correct_answer", "new_round",
+  "list_rounds", "get_state"
 ]);
-const MAX_SSE_PER_ROOM = 60;
-
-const buckets = new Map();
-function allow(key, limit, windowMs) {
-  const now = Date.now();
-  let b = buckets.get(key);
-  if (!b || now - b.start >= windowMs) { b = { start: now, n: 0 }; buckets.set(key, b); }
-  b.n += 1;
-  return b.n <= limit;
-}
-setInterval(() => { const now = Date.now(); for (const [k, b] of buckets) if (now - b.start > 120000) buckets.delete(k); }, 60000).unref();
 
 const app = express();
 app.disable("x-powered-by");
@@ -46,117 +40,69 @@ function bearer(req) {
 function fail(res, status, message, code) { 
   return res.status(status).json({ error: { message, code: code || null } }); 
 }
-async function readJson(r) {
-  const text = await r.text();
-  if (!text) return null;
-  try { return JSON.parse(text); } catch (_) { return { message: text.slice(0, 200) }; }
-}
-function sessionPayload(j) {
-  return { 
-    access_token: j.access_token, 
-    refresh_token: j.refresh_token, 
-    expires_at: j.expires_at || Math.floor(Date.now() / 1000) + (j.expires_in || 3600) 
-  };
-}
 
 /* API Endpoints */
 app.get("/api/health", (req, res) => res.json({ ok: true }));
 
+/* Tải phiên đăng nhập ẩn danh bằng Supabase SDK chuẩn */
 app.post("/api/session", async (req, res) => {
-  if (!allow("session:" + req.ip, 300, 60000)) return fail(res, 429, "Quá nhiều yêu cầu, thử lại sau.");
   const refresh = req.body && typeof req.body.refresh_token === "string" ? req.body.refresh_token : null;
-  
   try {
-    const url = refresh ? SUPABASE_URL + "/auth/v1/token?grant_type=refresh_token" : SUPABASE_URL + "/auth/v1/signup";
-    const body = refresh ? { refresh_token: refresh } : { data: {} };
-    const r = await fetch(url, {
-      method: "POST",
-      headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: "Bearer " + SUPABASE_SERVICE_ROLE_KEY, "content-type": "application/json" },
-      body: JSON.stringify(body)
-    });
-    const data = await readJson(r);
-    if (!r.ok || !data.access_token) return fail(res, 401, "Không thể xác thực phiên");
-    return res.json({ data: sessionPayload(data) });
-  } catch (e) { fail(res, 502, "Không kết nối được Supabase: " + e.message); }
+    if (refresh) {
+      const { data, error } = await supabaseAdmin.auth.refreshSession({ refresh_token: refresh });
+      if (error || !data.session) return fail(res, 401, (error && error.message) || "Không thể làm mới phiên");
+      return res.json({
+        data: {
+          access_token: data.session.access_token,
+          refresh_token: data.session.refresh_token,
+          expires_at: data.session.expires_at || Math.floor(Date.now() / 1000) + 3600
+        }
+      });
+    } else {
+      const { data, error } = await supabaseAdmin.auth.signInAnonymously();
+      if (error || !data.session) {
+        return fail(res, 401, (error && error.message) || "Lỗi tạo phiên. Đảm bảo 'Allow anonymous sign-ins' đã BẬT trên Supabase Dashboard.");
+      }
+      return res.json({
+        data: {
+          access_token: data.session.access_token,
+          refresh_token: data.session.refresh_token,
+          expires_at: data.session.expires_at || Math.floor(Date.now() / 1000) + 3600
+        }
+      });
+    }
+  } catch (e) {
+    fail(res, 502, "Lỗi kết nối Supabase: " + e.message);
+  }
 });
 
+/* Chuyển tiếp thao tác RPC */
 app.post("/api/rpc/:fn", async (req, res) => {
   const fn = req.params.fn;
   if (!RPC.has(fn)) return fail(res, 404, "Hàm không tồn tại");
   const token = bearer(req);
-  if (!token) return fail(res, 401, "Thiếu token", "NO_TOKEN");
-  if (!allow("rpc:" + crypto.createHash("sha256").update(token).digest("hex"), 240, 60000)) return fail(res, 429, "Thao tác quá nhanh.");
-  
-  const args = {};
-  if (req.body && typeof req.body === "object" && !Array.isArray(req.body))
-    for (const [k, v] of Object.entries(req.body)) if (/^p_[a-z_]+$/.test(k)) args[k] = v;
+  if (!token) return fail(res, 401, "Thiếu token");
+
+  try {
+    /* Khởi tạo client theo JWT phiên của người chơi */
+    const userSupabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: "Bearer " + token } },
+      auth: { persistSession: false }
+    });
+
+    const { data, error } = await userSupabase.rpc(fn, req.body || {});
+    if (error) return fail(res, 400, error.message, error.code);
     
-  try {
-    const r = await fetch(SUPABASE_URL + "/rest/v1/rpc/" + fn, {
-      method: "POST",
-      headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: "Bearer " + token, "content-type": "application/json" },
-      body: JSON.stringify(args)
-    });
-    const body = await readJson(r);
-    if (!r.ok) return fail(res, r.status === 401 ? 401 : 400, (body && body.message) || "Lỗi máy chủ", body && body.code);
-    res.json({ data: body });
-    if (RPC.get(fn) && typeof args.p_code === "string") broadcast(args.p_code.trim().toUpperCase());
-  } catch (e) { fail(res, 502, "Không kết nối được Supabase: " + e.message); }
+    res.json({ data });
+  } catch (e) { 
+    fail(res, 502, "Lỗi xử lý RPC: " + e.message); 
+  }
 });
-
-/* ===== Server-Sent Events (SSE) ===== */
-const rooms = new Map();
-function broadcast(code) {
-  const set = rooms.get(code);
-  if (!set) return;
-  const msg = "event: change\ndata: " + JSON.stringify({ t: Date.now() }) + "\n\n";
-  for (const r of set) { try { r.write(msg); } catch (_) {} }
-}
-setInterval(() => { for (const set of rooms.values()) for (const r of set) { try { r.write(": ping\n\n"); } catch (_) {} } }, 25000).unref();
-
-app.get("/api/events", async (req, res) => {
-  const code = String(req.query.code || "").trim().toUpperCase();
-  const token = String(req.query.token || "");
-  if (!/^[A-Z0-9]{6}$/.test(code) || !token) return fail(res, 400, "Thiếu mã phòng hoặc token");
-  if (!allow("sse:" + req.ip, 600, 60000)) return fail(res, 429, "Quá nhiều kết nối");
-  try {
-    const r = await fetch(SUPABASE_URL + "/rest/v1/rpc/get_state", {
-      method: "POST", 
-      headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: "Bearer " + token, "content-type": "application/json" }, 
-      body: JSON.stringify({ p_code: code })
-    });
-    if (r.status === 401) return fail(res, 401, "Token hết hạn", "JWT_EXPIRED");
-    if (!r.ok) return fail(res, 403, "Bạn không thuộc phòng này");
-  } catch (e) { return fail(res, 502, "Không kết nối được Supabase"); }
-  
-  let set = rooms.get(code);
-  if (!set) { set = new Set(); rooms.set(code, set); }
-  if (set.size >= MAX_SSE_PER_ROOM) return fail(res, 429, "Phòng có quá nhiều kết nối");
-  
-  res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache, no-transform", Connection: "keep-alive", "X-Accel-Buffering": "no" });
-  res.write("retry: 3000\nevent: hello\ndata: {}\n\n");
-  set.add(res);
-  req.on("close", () => { set.delete(res); if (!set.size && rooms.get(code) === set) rooms.delete(code); });
-});
-
-/* ===== Supabase Realtime ===== */
-function startRealtime() {
-  const admin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
-  admin.channel("rooms-feed")
-    .on("postgres_changes", { event: "*", schema: "public", table: "rooms" }, payload => {
-      const code = payload && payload.new && payload.new.code;
-      if (code) broadcast(code);
-    })
-    .subscribe(status => console.log("Supabase Realtime:", status));
-}
 
 app.use("/api/*", (req, res) => fail(res, 404, "Không tìm thấy API"));
 
 export default app;
 
 if (process.env.NODE_ENV !== "production") {
-  app.listen(PORT, () => {
-    console.log("Chạy tại http://localhost:" + PORT);
-    try { startRealtime(); } catch (e) { console.warn("Lỗi Realtime:", e.message); }
-  });
+  app.listen(PORT, () => console.log("Chạy tại http://localhost:" + PORT));
 }
