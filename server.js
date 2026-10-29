@@ -217,7 +217,14 @@ function startRealtime() {
     .subscribe(status => console.log("Supabase Realtime (rooms):", status));
 }
 
-app.use((req, res) => fail(res, 404, "Không tìm thấy"));
+/* Xử lý fallback chuyển giao diện HTML cho Vercel */
+app.get("*", (req, res) => {
+  if (req.path.startsWith("/api/")) {
+    return fail(res, 404, "Không tìm thấy API");
+  }
+  res.sendFile(path.resolve(__dirname, "index.html"));
+});
+
 app.use((err, req, res, next) => { fail(res, 400, "Yêu cầu không hợp lệ"); });
 
 export default app;
