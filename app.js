@@ -3,11 +3,10 @@
  * Trình duyệt chỉ hiển thị trạng thái nhận từ hàm get_state và gửi thao tác qua các hàm RPC. */
 "use strict";
 
-/* ===== 1. KẾT NỐI: trình duyệt chỉ nói chuyện với máy chủ trò chơi (server.js) cùng địa chỉ trang web.
- * Không có URL hay khóa Supabase nào trong tệp này; chúng nằm trong .env của máy chủ. ===== */
+/* ===== 1. KẾT NỐI ===== */
 const API = "/api";
 
-/* ===== 2. DỮ LIỆU BẢNG TUẦN HOÀN (H đến Ca). Tọa độ hiển thị suy ra từ chu kỳ và nhóm ===== */
+/* ===== 2. DỮ LIỆU BẢNG TUẦN HOÀN (H đến Ca) ===== */
 const ELEMENTS = [
   { atomicNumber: 1, symbol: "H", name: "Hydrogen", period: 1, group: 1, block: "s" },
   { atomicNumber: 2, symbol: "He", name: "Helium", period: 1, group: 18, block: "s" },
@@ -33,7 +32,7 @@ const ELEMENTS = [
 const EL_BY_Z = Object.fromEntries(ELEMENTS.map(e => [e.atomicNumber, e]));
 const GROUP_A = { 1: "IA", 2: "IIA", 13: "IIIA", 14: "IVA", 15: "VA", 16: "VIA", 17: "VIIA", 18: "VIIIA" };
 const PHASE_NAME = { lobby: "Phòng chờ", intro: "Hướng dẫn", work: "Làm bài", review: "Kiểm tra và hỗ trợ", confirm: "Xác nhận", finished: "Đã kết thúc" };
-const PHASE_END = { intro: 30, work: 210, review: 300, confirm: 360 };   // mốc giây tính từ lúc bắt đầu
+const PHASE_END = { intro: 30, work: 210, review: 300, confirm: 360 };
 const ERRORS = {
   NOT_AUTHENTICATED: "Chưa đăng nhập ẩn danh. Hãy tải lại trang.", ROOM_NOT_FOUND: "Không tìm thấy phòng với mã này.",
   INVALID_NAME: "Tên hiển thị phải từ 1 đến 30 ký tự.", HOST_CANNOT_JOIN: "Thiết bị này là chủ phòng, không thể vào với vai học sinh.",
@@ -86,9 +85,9 @@ function errText(e) {
 }
 function fmt(sec) { sec = Math.max(0, Math.ceil(sec)); return String(Math.floor(sec / 60)).padStart(2, "0") + ":" + String(sec % 60).padStart(2, "0"); }
 function qById(id) { return bank.find(q => q.id === id); }
-function save(k, v) { try { localStorage.setItem(k, v); } catch (_) { /* bỏ qua */ } }
+function save(k, v) { try { localStorage.setItem(k, v); } catch (_) {} }
 function load(k) { try { return localStorage.getItem(k); } catch (_) { return null; } }
-function drop(k) { try { localStorage.removeItem(k); } catch (_) { /* bỏ qua */ } }
+function drop(k) { try { localStorage.removeItem(k); } catch (_) {} }
 
 /* Kiểm tra quyền Host cố định */
 function isHostUser() {
@@ -97,6 +96,10 @@ function isHostUser() {
   const savedHostRoom = load("gm_host_room");
   const isHostByStorage = savedHostRoom && savedHostRoom === S.code;
   return Boolean(isHostByServer || isHostByStorage);
+}
+
+function getHostPlayerId() {
+  return load("gm_host_player_id") || (S.st && S.st.me ? S.st.me.player_id : null);
 }
 
 /* ===== 5. KIỂM TRA DỮ LIỆU CÂU HỎI ===== */
@@ -155,7 +158,7 @@ async function init() {
     return;
   }
   setInterval(tick, 250);
-  setInterval(() => { if (S.code) fetchState(); }, 3000);   // dự phòng khi luồng sự kiện bị đứt
+  setInterval(() => { if (S.code) fetchState(); }, 3000);
   document.addEventListener("visibilitychange", () => { if (!document.hidden && S.code) { subscribe(); fetchState(); } });
   window.addEventListener("online", () => { if (S.code) { subscribe(); fetchState(); } });
   const saved = load("gm_room");
@@ -168,7 +171,7 @@ function readTokens() { try { return JSON.parse(load("gm_tokens") || "null"); } 
 async function postJson(url, body, token) {
   const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json", ...(token ? { Authorization: "Bearer " + token } : {}) }, body: JSON.stringify(body || {}) });
   let j = null;
-  try { j = await res.json(); } catch (_) { /* phản hồi không phải JSON */ }
+  try { j = await res.json(); } catch (_) {}
   if (!res.ok) { const e = new Error((j && j.error && j.error.message) || "HTTP " + res.status); e.status = res.status; throw e; }
   return j.data;
 }
@@ -215,7 +218,7 @@ async function subscribe() {
   es.addEventListener("hello", () => { S.connOk = true; scheduleFetch(); });
   es.onerror = () => {
     if (es.readyState === EventSource.CLOSED && S.events === es) {
-      S.events = null; S.eventsTimer = setTimeout(async () => { try { await ensureSession(true); } catch (_) { /* thử lại */ } subscribe(); }, 3000);
+      S.events = null; S.eventsTimer = setTimeout(async () => { try { await ensureSession(true); } catch (_) {} subscribe(); }, 3000);
     }
   };
 }
@@ -287,6 +290,7 @@ function leaveRoom() {
   S.code = null; S.st = null; S.applied = S.seq; 
   drop("gm_room"); 
   drop("gm_host_room");
+  drop("gm_host_player_id");
   updateTop();
 }
 
@@ -346,7 +350,8 @@ function viewHome() {
           ev.target.disabled = true; S.homeError = "";
           try { 
             const r = await rpc("create_room", { p_max_players: +maxIn.value }); 
-            save("gm_host_room", r.code); // Lưu cờ quyền Host
+            save("gm_host_room", r.code);
+            if (r.host_id || r.player_id) save("gm_host_player_id", r.host_id || r.player_id);
             await enterRoom(r.code); 
           }
           catch (e) { S.homeError = errText(e); render(true); }
@@ -357,7 +362,8 @@ function viewHome() {
         h("p", null, h("button", { onclick: async ev => {
           ev.target.disabled = true; S.homeError = "";
           try { 
-            drop("gm_host_room"); // Người chơi thường không có cờ Host
+            drop("gm_host_room");
+            drop("gm_host_player_id");
             const r = await rpc("join_room", { p_code: codeIn.value.trim().toUpperCase(), p_name: nameIn.value.trim() }); 
             await enterRoom(r.code); 
           }
@@ -374,7 +380,7 @@ async function enterRoom(code) {
 function viewLobby() {
   const st = S.st, host = isHostUser();
   const list = h("ul", { class: "players" }, st.players.map(p => h("li", null, h("span", null, p.name),
-    host ? h("button", { class: "secondary", onclick: () => act(() => rpc("remove_player", { p_code: S.code, p_player_id: p.id })) }, "Xóa") : null)));
+    host ? h("button", { class: "secondary", onclick: () => act(() => rpc("remove_player", { p_code: S.code, p_player_id: p.id, p_host_id: getHostPlayerId() })) }, "Xóa") : null)));
   return h("div", null,
     h("div", { class: "card" }, h("h2", null, "Phòng chờ · Lượt " + st.round.round_no + (st.round.set === "main" ? " (bộ câu chính)" : " (bộ câu dự phòng)")),
       h("p", { class: "muted" }, "Mã phòng"), h("div", { class: "code" }, S.code),
@@ -392,7 +398,7 @@ async function startGame() {
     const zs = bank.filter(q => q.set === S.st.round.set).sort((a, b) => a.order - b.order).map(q => q.atomicNumber);
     const chk = await rpc("check_round_set", { p_code: S.code, p_z: zs });
     if (!chk.match) { toast("Dữ liệu questions.json không khớp đáp án trên máy chủ. Không thể bắt đầu."); return; }
-    await rpc("start_round", { p_code: S.code }); await fetchState();
+    await rpc("start_round", { p_code: S.code, p_player_id: getHostPlayerId() }); await fetchState();
   } catch (e) { toast(errText(e)); }
 }
 async function act(fn) { try { await fn(); await fetchState(); } catch (e) { toast(errText(e)); await fetchState(); } }
@@ -417,19 +423,20 @@ function viewGame() {
 
 function hostControls() {
   const st = S.st, ph = st.round.phase, r = st.round;
+  const hostId = getHostPlayerId();
   const nextLabel = { intro: "Vào giai đoạn Làm bài", work: "Khóa bài, sang Kiểm tra", review: "Sang Xác nhận", confirm: "Kết thúc lượt" }[ph];
   const btns = [];
   if (r.status === "running") {
-    if (nextLabel) btns.push(h("button", { class: "warn", onclick: () => { if (ph !== "work" || confirm("Khóa nộp bài ngay bây giờ?")) act(() => rpc("advance_phase", { p_code: S.code })); } }, nextLabel));
+    if (nextLabel) btns.push(h("button", { class: "warn", onclick: () => { if (ph !== "work" || confirm("Khóa nộp bài ngay bây giờ?")) act(() => rpc("advance_phase", { p_code: S.code, p_player_id: hostId })); } }, nextLabel));
     if (ph === "review") {
-      btns.push(h("button", { disabled: r.hint_used, onclick: () => act(() => rpc("use_hint", { p_code: S.code })) }, r.hint_used ? "Quyền hỗ trợ đã dùng" : "Dùng quyền hỗ trợ (1 lần)"));
-      btns.push(h("button", { class: "secondary", onclick: () => act(() => rpc("set_correction", { p_code: S.code, p_open: !r.correction_open })) }, r.correction_open ? "Đóng quyền sửa sai" : "Mở quyền sửa sai"));
+      btns.push(h("button", { disabled: r.hint_used, onclick: () => act(() => rpc("use_hint", { p_code: S.code, p_player_id: hostId })) }, r.hint_used ? "Quyền hỗ trợ đã dùng" : "Dùng quyền hỗ trợ (1 lần)"));
+      btns.push(h("button", { class: "secondary", onclick: () => act(() => rpc("set_correction", { p_code: S.code, p_open: !r.correction_open, p_player_id: hostId })) }, r.correction_open ? "Đóng quyền sửa sai" : "Mở quyền sửa sai"));
     }
-    btns.push(h("button", { class: "danger", onclick: () => { if (confirm("Kết thúc lượt ngay và lưu kết quả?")) act(() => rpc("end_round", { p_code: S.code })); } }, "Kết thúc lượt ngay"));
+    btns.push(h("button", { class: "danger", onclick: () => { if (confirm("Kết thúc lượt ngay và lưu kết quả?")) act(() => rpc("end_round", { p_code: S.code, p_player_id: hostId })); } }, "Kết thúc lượt ngay"));
   }
   if (r.status === "finished") {
-    btns.push(h("button", { onclick: () => act(() => rpc("new_round", { p_code: S.code, p_set: "main" })) }, "Chơi lại: bộ câu chính"));
-    btns.push(h("button", { class: "secondary", onclick: () => act(() => rpc("new_round", { p_code: S.code, p_set: "reserve" })) }, "Chơi lại: bộ dự phòng"));
+    btns.push(h("button", { onclick: () => act(() => rpc("new_round", { p_code: S.code, p_set: "main", p_player_id: hostId })) }, "Chơi lại: bộ câu chính"));
+    btns.push(h("button", { class: "secondary", onclick: () => act(() => rpc("new_round", { p_code: S.code, p_set: "reserve", p_player_id: hostId })) }, "Chơi lại: bộ dự phòng"));
   }
   return h("div", { class: "card" }, h("b", null, "Điều khiển của giáo viên"), h("div", { class: "row", style: "margin-top:8px" }, btns),
     ph === "review" ? h("p", { class: "muted" }, `Quyền hỗ trợ: ${r.hint_used ? "đã dùng" : "chưa dùng"} · Sửa sai: ${r.correction_open ? "đang mở" : "đang đóng"}`) : null);
@@ -472,7 +479,7 @@ function answerEditor(qid, mode) {
   const sel = EL_BY_Z[d.z];
   return h("div", null,
     h("div", { class: "card" }, h("h3", null, qid + " · " + q.title), h("pre", { class: "cfg" }, q.data), h("p", null, q.task)),
-    h("p", null, "Bước 1 · Chạm vào ô nguyên tố trên bảng: ", sel ? h("b", null, `${sel.symbol} (Z = ${sel.atomicNumber})`) : h("span", { class: "muted" }, "chưa chọn")),
+    h("p", null, "Bước 1 · Chạm trực tiếp vào ô ký hiệu nguyên tố (H, Li, Be, Na...) trên bảng: ", sel ? h("b", null, `${sel.symbol} (Z = ${sel.atomicNumber})`) : h("span", { class: "muted" }, "chưa chọn")),
     periodicTable({ onPick: z => setDraft({ z }), selectedZ: d.z }),
     h("p", null, "Bước 2 · Chọn thẻ vị trí đúng:"),
     h("div", { class: "cards" }, q.positionOptions.map(o => h("button", { class: d.period === o.period && d.group === o.group ? "on" : "", onclick: () => setDraft({ period: o.period, group: o.group }) },
