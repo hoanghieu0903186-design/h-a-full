@@ -13,12 +13,33 @@ const __dirname = path.dirname(__filename);
 
 /* ===== Cấu hình Biến Môi Trường ===== */
 const PORT = Number(process.env.PORT) || 3000;
-const SUPABASE_URL = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "").replace(/\/+$/, "");
-const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || "";
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY || SUPABASE_ANON_KEY;
+const SUPABASE_URL = (
+  process.env.SUPABASE_URL || 
+  process.env.VITE_SUPABASE_URL || 
+  ""
+).replace(/\/+$/, "");
 
-/* Khởi tạo Supabase Admin Client */
-const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+const SUPABASE_ANON_KEY = 
+  process.env.SUPABASE_ANON_KEY || 
+  process.env.VITE_SUPABASE_ANON_KEY || 
+  "";
+
+const SUPABASE_SERVICE_KEY = 
+  process.env.SUPABASE_SERVICE_ROLE_KEY || 
+  process.env.SUPABASE_SECRET_KEY || 
+  SUPABASE_ANON_KEY;
+
+/* 
+ * Client chuyên tạo Auth Session (Bắt buộc dùng ANON KEY)
+ */
+const supabaseAuthClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: { persistSession: false, autoRefreshToken: false }
+});
+
+/* 
+ * Client Admin thực thi RPC / Database (Dùng Service Key)
+ */
+const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
   auth: { persistSession: false, autoRefreshToken: false }
 });
 
@@ -41,7 +62,7 @@ function fail(res, status, message, code) {
   return res.status(status).json({ error: { message, code: code || null } }); 
 }
 
-/* Hàm phục vụ file tĩnh an toàn */
+/* Hàm phục vụ file tĩnh an toàn trên Vercel Serverless */
 function serveFile(res, filePath, contentType) {
   try {
     const fullPath = path.join(__dirname, filePath);
@@ -60,7 +81,7 @@ app.post("/api/session", async (req, res) => {
   const refresh = req.body && typeof req.body.refresh_token === "string" ? req.body.refresh_token : null;
   try {
     if (refresh) {
-      const { data, error } = await supabaseAdmin.auth.refreshSession({ refresh_token: refresh });
+      const { data, error } = await supabaseAuthClient.auth.refreshSession({ refresh_token: refresh });
       if (error || !data.session) return fail(res, 401, (error && error.message) || "Không thể làm mới phiên");
       return res.json({
         data: {
@@ -70,7 +91,8 @@ app.post("/api/session", async (req, res) => {
         }
       });
     } else {
-      const { data, error } = await supabaseAdmin.auth.signInAnonymously();
+      /* Gọi tạo session bằng Auth Client mang Anon Key */
+      const { data, error } = await supabaseAuthClient.auth.signInAnonymously();
       if (error || !data.session) {
         return fail(res, 401, (error && error.message) || "Lỗi tạo phiên.");
       }
