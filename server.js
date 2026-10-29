@@ -1,10 +1,16 @@
-/* GIẢI MÃ BẢN ĐỒ NGUYÊN TỐ - Backend Express API tương thích API Key mới */
+/* GIẢI MÃ BẢN ĐỒ NGUYÊN TỐ - Backend Express API & Phục vụ file tĩnh cho Vercel */
 import dotenv from "dotenv";
 dotenv.config();
 
+import fs from "fs";
+import path from "path";
 import crypto from "crypto";
 import express from "express";
 import { createClient } from "@supabase/supabase-js";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 /* ===== Cấu hình ===== */
 const PORT = Number(process.env.PORT) || 3000;
@@ -39,6 +45,18 @@ function bearer(req) {
 }
 function fail(res, status, message, code) { 
   return res.status(status).json({ error: { message, code: code || null } }); 
+}
+
+/* Hàm phục vụ file tĩnh an toàn trên Vercel Serverless */
+function serveFile(res, filePath, contentType) {
+  try {
+    const fullPath = path.join(__dirname, filePath);
+    if (fs.existsSync(fullPath)) {
+      res.setHeader("Content-Type", contentType);
+      return res.send(fs.readFileSync(fullPath));
+    }
+  } catch (_) {}
+  return fail(res, 404, "File not found: " + filePath);
 }
 
 /* API Endpoints */
@@ -99,7 +117,17 @@ app.post("/api/rpc/:fn", async (req, res) => {
   }
 });
 
+/* Phục vụ các file giao diện tĩnh */
+app.get("/", (req, res) => serveFile(res, "index.html", "text/html; charset=utf-8"));
+app.get("/index.html", (req, res) => serveFile(res, "index.html", "text/html; charset=utf-8"));
+app.get("/style.css", (req, res) => serveFile(res, "style.css", "text/css; charset=utf-8"));
+app.get("/app.js", (req, res) => serveFile(res, "app.js", "application/javascript; charset=utf-8"));
+app.get("/questions.json", (req, res) => serveFile(res, "questions.json", "application/json; charset=utf-8"));
+
 app.use("/api/*", (req, res) => fail(res, 404, "Không tìm thấy API"));
+
+/* Catch-all trả về index.html cho các route giao diện khác */
+app.get("*", (req, res) => serveFile(res, "index.html", "text/html; charset=utf-8"));
 
 export default app;
 
