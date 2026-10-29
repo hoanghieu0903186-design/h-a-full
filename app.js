@@ -57,7 +57,7 @@ const S = {
   lastRenderKey: "", lastFetch: 0, history: null, historyFor: null, homeError: ""
 };
 
-/* ===== 4. TIỆN ÍCH GIAO DIỆN (dựng DOM bằng textContent, không dùng innerHTML với dữ liệu người dùng) ===== */
+/* ===== 4. TIỆN ÍCH GIAO DIỆN ===== */
 function h(tag, props, ...kids) {
   const el = document.createElement(tag);
   for (const [k, v] of Object.entries(props || {})) {
@@ -90,7 +90,16 @@ function save(k, v) { try { localStorage.setItem(k, v); } catch (_) { /* bỏ qu
 function load(k) { try { return localStorage.getItem(k); } catch (_) { return null; } }
 function drop(k) { try { localStorage.removeItem(k); } catch (_) { /* bỏ qua */ } }
 
-/* ===== 5. KIỂM TRA DỮ LIỆU CÂU HỎI (chạy trước khi cho tạo phòng hoặc bắt đầu lượt) ===== */
+/* Kiểm tra quyền Host cố định */
+function isHostUser() {
+  if (!S.st) return false;
+  const isHostByServer = S.st.role === "host";
+  const savedHostRoom = load("gm_host_room");
+  const isHostByStorage = savedHostRoom && savedHostRoom === S.code;
+  return Boolean(isHostByServer || isHostByStorage);
+}
+
+/* ===== 5. KIỂM TRA DỮ LIỆU CÂU HỎI ===== */
 function parseConfig(cfg) {
   const sup = "⁰¹²³⁴⁵⁶⁷⁸⁹", parts = [];
   for (const m of cfg.matchAll(/(\d)([spdf])([⁰¹²³⁴⁵⁶⁷⁸⁹]+)/g))
@@ -153,7 +162,7 @@ async function init() {
   if (saved) { S.code = saved; subscribe(); await fetchState(); } else render();
 }
 
-/* Phiên đăng nhập ẩn danh do máy chủ cấp. Lưu trong localStorage để tải lại trang vẫn là cùng một người chơi. */
+/* Phiên đăng nhập ẩn danh */
 let sessionPromise = null;
 function readTokens() { try { return JSON.parse(load("gm_tokens") || "null"); } catch (_) { return null; } }
 async function postJson(url, body, token) {
@@ -166,13 +175,13 @@ async function postJson(url, body, token) {
 function ensureSession(force) {
   const t = readTokens();
   if (!force && t && t.expires_at - Date.now() / 1000 > 60) return Promise.resolve(t);
-  if (sessionPromise) return sessionPromise;   // chỉ một yêu cầu làm mới tại một thời điểm
+  if (sessionPromise) return sessionPromise;
   sessionPromise = (async () => {
     try {
       let data;
       if (t && t.refresh_token) {
         try { data = await postJson(API + "/session", { refresh_token: t.refresh_token }); }
-        catch (e) { if (e.status !== 401) throw e; data = await postJson(API + "/session", {}); }   // phiên cũ hết hạn hẳn: phải đăng nhập lại (mất quyền chủ phòng cũ)
+        catch (e) { if (e.status !== 401) throw e; data = await postJson(API + "/session", {}); }
       } else data = await postJson(API + "/session", {});
       save("gm_tokens", JSON.stringify(data));
       return data;
@@ -184,11 +193,11 @@ async function rpc(fn, args) {
   for (let attempt = 0; attempt < 2; attempt++) {
     const t = await ensureSession(attempt > 0);
     try { return await postJson(API + "/rpc/" + fn, args || {}, t.access_token); }
-    catch (e) { if (e.status === 401 && attempt === 0) continue; throw e; }   // token hết hạn: làm mới và thử lại đúng một lần
+    catch (e) { if (e.status === 401 && attempt === 0) continue; throw e; }
   }
 }
 
-/* ===== 7. ĐỒNG BỘ TRẠNG THÁI: máy chủ đẩy sự kiện "phòng vừa đổi" qua SSE, trình duyệt tải lại trạng thái ===== */
+/* ===== 7. ĐỒNG BỘ TRẠNG THÁI ===== */
 function closeEvents() {
   clearTimeout(S.eventsTimer); S.eventsTimer = null;
   if (S.events) { S.events.close(); S.events = null; }
@@ -205,12 +214,12 @@ async function subscribe() {
   es.addEventListener("change", scheduleFetch);
   es.addEventListener("hello", () => { S.connOk = true; scheduleFetch(); });
   es.onerror = () => {
-    if (es.readyState === EventSource.CLOSED && S.events === es) {   // máy chủ từ chối (token hết hạn, không thuộc phòng): đăng ký lại sau
-      S.events = null; S.eventsTimer = setTimeout(async () => { try { await ensureSession(true); } catch (_) { /* thử lại ở lần sau */ } subscribe(); }, 3000);
+    if (es.readyState === EventSource.CLOSED && S.events === es) {
+      S.events = null; S.eventsTimer = setTimeout(async () => { try { await ensureSession(true); } catch (_) { /* thử lại */ } subscribe(); }, 3000);
     }
   };
 }
-function scheduleFetch() {   // gộp nhiều sự kiện liên tiếp thành một lần tải
+function scheduleFetch() {
   if (S.fetchTimer) return;
   S.fetchTimer = setTimeout(() => { S.fetchTimer = null; fetchState(); }, 80);
 }
@@ -219,7 +228,7 @@ async function fetchState() {
   const mySeq = ++S.seq, code = S.code;
   try {
     const data = await rpc("get_state", { p_code: code });
-    if (code !== S.code || mySeq < S.applied) return;   // bỏ qua phản hồi đến trễ/không đúng thứ tự
+    if (code !== S.code || mySeq < S.applied) return;
     S.applied = mySeq; S.connOk = true; S.lastFetch = Date.now();
     applyState(data);
   } catch (e) {
@@ -249,7 +258,7 @@ function tick() {
   const lp = localPhase();
   if (lp !== S.st.round.phase && Date.now() - S.lastFetch > 800) { S.lastFetch = Date.now(); fetchState(); }
   const big = $("big-timer"); if (big) big.textContent = timerText();
-  if (S.st.round.phase === "work" && lp !== "work") { const b = $("submit-btn"); if (b) b.disabled = true; }   // khóa ngay khi hết giờ
+  if (S.st.round.phase === "work" && lp !== "work") { const b = $("submit-btn"); if (b) b.disabled = true; }
 }
 function timerText() {
   const e = elapsedNow(), p = localPhase();
@@ -275,16 +284,18 @@ async function loadHistory(roundId) {
 }
 function leaveRoom() {
   closeEvents();
-  S.code = null; S.st = null; S.applied = S.seq; drop("gm_room"); updateTop();
+  S.code = null; S.st = null; S.applied = S.seq; 
+  drop("gm_room"); 
+  drop("gm_host_room");
+  updateTop();
 }
 
-/* ===== 8. BẢN NHÁP CÂU TRẢ LỜI (giữ khi tải lại trang) ===== */
+/* ===== 8. BẢN NHÁP CÂU TRẢ LỜI ===== */
 function loadDraft(roundId) { try { return JSON.parse(load("gm_draft_" + roundId) || "{}"); } catch (_) { return {}; } }
 function saveDraft() { if (S.st) save("gm_draft_" + S.st.round.id, JSON.stringify(S.draft)); }
 
 /* ===== 9. BẢNG TUẦN HOÀN ===== */
 function periodicTable(opts) {
-  // opts: { onPick(z) | null, selectedZ, marks: {z: "placed"|"wrong"|"pending"}, dimOthers }
   const grid = h("div", { class: "pt" + (opts.onPick ? " interactive" : "") });
   grid.append(h("div", { class: "pt-head", style: "grid-row:1;grid-column:1" }, ""));
   for (let g = 1; g <= 18; g++) grid.append(h("div", { class: "pt-head", style: `grid-row:1;grid-column:${g + 1}` }, g));
@@ -309,7 +320,7 @@ function periodicTable(opts) {
 /* ===== 10. VẼ GIAO DIỆN ===== */
 function render(force) {
   const st = S.st;
-  const key = JSON.stringify([S.code, st && { ...st, server_time: 0, round: { ...st.round, elapsed: 0 } }, S.draft, S.activeQ, S.detailQ, S.homeError, !!S.history, bankErrors.length]);
+  const key = JSON.stringify([S.code, st && { ...st, server_time: 0, round: { ...st.round, elapsed: 0 } }, S.draft, S.activeQ, S.detailQ, S.homeError, !!S.history, bankErrors.length, isHostUser()]);
   if (!force && key === S.lastRenderKey) return;
   S.lastRenderKey = key;
   const app = $("app"), view = !S.code || !st ? viewHome() : st.round.status === "lobby" ? viewLobby() : viewGame();
@@ -333,7 +344,11 @@ function viewHome() {
         h("label", { for: "in-max" }, "Số điều tra viên tối đa"), maxIn,
         h("p", null, h("button", { disabled: bankErrors.length > 0, onclick: async ev => {
           ev.target.disabled = true; S.homeError = "";
-          try { const r = await rpc("create_room", { p_max_players: +maxIn.value }); await enterRoom(r.code); }
+          try { 
+            const r = await rpc("create_room", { p_max_players: +maxIn.value }); 
+            save("gm_host_room", r.code); // Lưu cờ quyền Host
+            await enterRoom(r.code); 
+          }
           catch (e) { S.homeError = errText(e); render(true); }
         } }, "Tạo phòng"))),
       h("div", { class: "card" }, h("h2", null, "Điều tra viên / Học sinh"),
@@ -341,7 +356,11 @@ function viewHome() {
         h("label", { for: "in-name" }, "Tên hiển thị"), nameIn,
         h("p", null, h("button", { onclick: async ev => {
           ev.target.disabled = true; S.homeError = "";
-          try { const r = await rpc("join_room", { p_code: codeIn.value.trim().toUpperCase(), p_name: nameIn.value.trim() }); await enterRoom(r.code); }
+          try { 
+            drop("gm_host_room"); // Người chơi thường không có cờ Host
+            const r = await rpc("join_room", { p_code: codeIn.value.trim().toUpperCase(), p_name: nameIn.value.trim() }); 
+            await enterRoom(r.code); 
+          }
           catch (e) { S.homeError = errText(e); render(true); }
         } }, "Tham gia"))))
   );
@@ -353,7 +372,7 @@ async function enterRoom(code) {
 
 /* --- Phòng chờ --- */
 function viewLobby() {
-  const st = S.st, host = st.role === "host";
+  const st = S.st, host = isHostUser();
   const list = h("ul", { class: "players" }, st.players.map(p => h("li", null, h("span", null, p.name),
     host ? h("button", { class: "secondary", onclick: () => act(() => rpc("remove_player", { p_code: S.code, p_player_id: p.id })) }, "Xóa") : null)));
   return h("div", null,
@@ -361,7 +380,7 @@ function viewLobby() {
       h("p", { class: "muted" }, "Mã phòng"), h("div", { class: "code" }, S.code),
       h("p", null, `Đã vào: ${st.players.length} / ${st.room.max_players} điều tra viên`),
       host ? h("p", { class: "muted" }, "Chia mã phòng cho học sinh. Khi bắt đầu, 10 câu hỏi được chia đều cho những người đã vào phòng.") :
-        h("p", null, "Bạn là: ", h("b", null, st.me.name), ". Đang chờ giáo viên bắt đầu…")),
+        h("p", null, "Bạn là: ", h("b", null, (st.me && st.me.name) || "Học sinh"), ". Đang chờ giáo viên bắt đầu…")),
     h("div", { class: "card" }, h("h3", null, "Danh sách điều tra viên"), st.players.length ? list : h("p", { class: "muted" }, "Chưa có ai.")),
     host ? h("div", { class: "card" },
       bankErrors.length ? h("div", { class: "error" }, "Dữ liệu câu hỏi lỗi: " + bankErrors.join(" ")) : null,
@@ -380,13 +399,13 @@ async function act(fn) { try { await fn(); await fetchState(); } catch (e) { toa
 
 /* --- Màn hình trò chơi --- */
 function viewGame() {
-  const st = S.st, host = st.role === "host", phase = st.round.phase;
-  const myTasks = host ? [] : st.tasks.filter(t => t.player_id === st.me.player_id);
+  const st = S.st, host = isHostUser(), phase = st.round.phase;
+  const myTasks = host ? [] : st.tasks.filter(t => st.me && t.player_id === st.me.player_id);
   const nameOf = id => (st.players.find(p => p.id === id) || {}).name || "?";
   const parts = [];
   parts.push(h("div", { class: "card row" }, h("span", { class: "stamp" }, PHASE_NAME[phase].toUpperCase()),
     h("span", { id: "big-timer", class: "timer" }, timerText()),
-    h("span", { class: "muted" }, `Lượt ${st.round.round_no} · ${host ? "Giáo viên" : "Điều tra viên " + st.me.name}`)));
+    h("span", { class: "muted" }, `Lượt ${st.round.round_no} · ${host ? "Giáo viên" : "Điều tra viên " + ((st.me && st.me.name) || "")}`)));
   if (host) parts.push(hostControls());
 
   if (phase === "intro") parts.push(viewIntro(myTasks, nameOf));
@@ -417,7 +436,7 @@ function hostControls() {
 }
 
 function viewIntro(myTasks, nameOf) {
-  const st = S.st, host = st.role === "host";
+  const st = S.st, host = isHostUser();
   return h("div", { class: "card" }, h("h2", null, "Luật chơi"),
     h("ol", null,
       h("li", null, "Mỗi điều tra viên nhận câu hỏi riêng; tất cả làm bài cùng lúc."),
@@ -547,7 +566,7 @@ function viewFinal(nameOf) {
     h("table", { class: "t", style: "margin-top:12px" }, h("thead", null, h("tr", null, h("th", null, "Câu"), h("th", null, "Nguyên tố"), h("th", null, "Người làm"), h("th", null, "Kết quả"))),
       h("tbody", null, res.questions.map(x => h("tr", null, h("td", null, x.question_id), h("td", null, EL_BY_Z[x.atomic_number].symbol + " (Z = " + x.atomic_number + ")"),
         h("td", null, nameOf(x.player_id)), h("td", null, h("span", { class: "tag " + (x.correct ? "ok" : "bad") }, !x.answered ? "Chưa nộp" : x.correct ? "Đúng" : "Sai")))))),
-    st.round.phase === "finished" && st.role !== "host" ? h("p", { class: "muted" }, "Đang chờ giáo viên tạo lượt mới (nếu có).") : null);
+    st.round.phase === "finished" && !isHostUser() ? h("p", { class: "muted" }, "Đang chờ giáo viên tạo lượt mới (nếu có).") : null);
 }
 function historyCard() {
   const hs = S.history; if (!hs || hs.length < 2) return null;
