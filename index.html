@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Giải mã bản đồ nguyên tố</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">⚛ GIẢI MÃ BẢN ĐỒ NGUYÊN TỐ <small>HỒ SƠ MẬT · HÓA HỌC 10</small></div>
+    <div id="topinfo" class="topinfo" hidden>
+      <span id="top-room"></span>
+      <span id="top-conn" class="conn" title="Trạng thái kết nối">●</span>
+      <span id="top-timer" class="timer"></span>
+    </div>
+  </header>
+
+  <main id="app" aria-live="polite">
+    <p class="muted">Đang tải…</p>
+  </main>
+
+  <div id="lock-overlay" class="overlay" hidden>
+    <div class="lock-box">PHONG TỎA HỒ SƠ!</div>
+  </div>
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
