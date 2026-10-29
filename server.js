@@ -9,6 +9,7 @@
 import dotenv from "dotenv";
 dotenv.config();
 
+import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 import express from "express";
@@ -45,7 +46,6 @@ const RPC = new Map([
   ["use_hint", true], ["submit_answer", true], ["correct_answer", true], ["new_round", true],
   ["list_rounds", false], ["get_state", false]
 ]);
-const STATIC_FILES = { "/": "index.html", "/index.html": "index.html", "/style.css": "style.css", "/app.js": "app.js", "/questions.json": "questions.json" };
 const MAX_SSE_PER_ROOM = 60;
 
 /* ===== Giới hạn tần suất đơn giản trong bộ nhớ ===== */
@@ -66,20 +66,37 @@ app.set("trust proxy", 1);
 app.use((req, res, next) => {
   res.set("X-Content-Type-Options", "nosniff");
   res.set("Referrer-Policy", "no-referrer");
-  res.set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'");
+  res.set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://*.supabase.co; frame-ancestors 'none'");
   next();
 });
 app.use(express.json({ limit: "4kb" }));
 
-/* Phục vụ file tĩnh từ thư mục gốc */
-app.use(express.static(__dirname));
+/* Phục vụ file tĩnh trực tiếp bằng fs.readFileSync chuẩn hóa MIME Types cho Vercel */
+const MIME_TYPES = {
+  ".html": "text/html; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".js": "application/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8"
+};
 
-for (const [url, file] of Object.entries(STATIC_FILES)) {
-  app.get(url, (req, res) => {
-    res.set("Cache-Control", "no-cache");
-    res.sendFile(path.resolve(__dirname, file));
-  });
+function serveStaticFile(filename, res) {
+  try {
+    const filePath = path.join(__dirname, filename);
+    const ext = path.extname(filename);
+    const content = fs.readFileSync(filePath);
+    res.setHeader("Content-Type", MIME_TYPES[ext] || "text/plain");
+    res.setHeader("Cache-Control", "no-cache");
+    return res.send(content);
+  } catch (e) {
+    return res.status(404).json({ error: { message: "File not found: " + filename } });
+  }
 }
+
+app.get("/", (req, res) => serveStaticFile("index.html", res));
+app.get("/index.html", (req, res) => serveStaticFile("index.html", res));
+app.get("/style.css", (req, res) => serveStaticFile("style.css", res));
+app.get("/app.js", (req, res) => serveStaticFile("app.js", res));
+app.get("/questions.json", (req, res) => serveStaticFile("questions.json", res));
 
 app.get("/api/health", (req, res) => res.json({ ok: true }));
 
@@ -217,19 +234,21 @@ function startRealtime() {
     .subscribe(status => console.log("Supabase Realtime (rooms):", status));
 }
 
-/* Xử lý fallback chuyển giao diện HTML cho Vercel */
+/* Fallback chuyển tiếp HTML cho Vercel */
 app.get("*", (req, res) => {
   if (req.path.startsWith("/api/")) {
     return fail(res, 404, "Không tìm thấy API");
   }
-  res.sendFile(path.resolve(__dirname, "index.html"));
+  serveStaticFile("index.html", res);
 });
 
 app.use((err, req, res, next) => { fail(res, 400, "Yêu cầu không hợp lệ"); });
 
 export default app;
 
-app.listen(PORT, () => {
-  console.log("Giải mã bản đồ nguyên tố đang chạy tại http://localhost:" + PORT);
-  try { startRealtime(); } catch (e) { console.warn("Không bật được Realtime, vẫn dùng thông báo sau thao tác và truy vấn định kỳ:", e.message); }
-});
+if (process.env.NODE_ENV !== "production") {
+  app.listen(PORT, () => {
+    console.log("Giải mã bản đồ nguyên tố đang chạy tại http://localhost:" + PORT);
+    try { startRealtime(); } catch (e) { console.warn("Không bật được Realtime:", e.message); }
+  });
+}
