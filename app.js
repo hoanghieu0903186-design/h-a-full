@@ -52,7 +52,7 @@ const ERRORS = {
 let bank = null, bankErrors = [];
 const S = {
   code: null, st: null, seq: 0, applied: 0, syncAt: 0, elapsed0: null,
-  draft: {}, activeQ: null, detailQ: null, busy: false, connOk: true, events: null, eventsTimer: null, fetchTimer: null,
+  draft: {}, activeQ: null, detailQ: null, busy: false, connOk: true, fetchTimer: null,
   lastRenderKey: "", lastFetch: 0, history: null, historyFor: null, homeError: ""
 };
 
@@ -158,11 +158,12 @@ async function init() {
     return;
   }
   setInterval(tick, 250);
-  setInterval(() => { if (S.code) fetchState(); }, 3000);
-  document.addEventListener("visibilitychange", () => { if (!document.hidden && S.code) { subscribe(); fetchState(); } });
-  window.addEventListener("online", () => { if (S.code) { subscribe(); fetchState(); } });
+  setInterval(() => { if (S.code) fetchState(); }, 2000); // Polling tự động mỗi 2 giây
+  document.addEventListener("visibilitychange", () => { if (!document.hidden && S.code) fetchState(); });
+  window.addEventListener("online", () => { if (S.code) fetchState(); });
+  
   const saved = load("gm_room");
-  if (saved) { S.code = saved; subscribe(); await fetchState(); } else render();
+  if (saved) { S.code = saved; await fetchState(); } else render();
 }
 
 /* Phiên đăng nhập ẩn danh */
@@ -201,31 +202,6 @@ async function rpc(fn, args) {
 }
 
 /* ===== 7. ĐỒNG BỘ TRẠNG THÁI ===== */
-function closeEvents() {
-  clearTimeout(S.eventsTimer); S.eventsTimer = null;
-  if (S.events) { S.events.close(); S.events = null; }
-}
-async function subscribe() {
-  closeEvents();
-  if (!S.code) return;
-  const code = S.code;
-  let t;
-  try { t = await ensureSession(); } catch (_) { S.eventsTimer = setTimeout(subscribe, 3000); return; }
-  if (code !== S.code) return;
-  const es = new EventSource(API + "/events?code=" + encodeURIComponent(code) + "&token=" + encodeURIComponent(t.access_token));
-  S.events = es;
-  es.addEventListener("change", scheduleFetch);
-  es.addEventListener("hello", () => { S.connOk = true; scheduleFetch(); });
-  es.onerror = () => {
-    if (es.readyState === EventSource.CLOSED && S.events === es) {
-      S.events = null; S.eventsTimer = setTimeout(async () => { try { await ensureSession(true); } catch (_) {} subscribe(); }, 3000);
-    }
-  };
-}
-function scheduleFetch() {
-  if (S.fetchTimer) return;
-  S.fetchTimer = setTimeout(() => { S.fetchTimer = null; fetchState(); }, 80);
-}
 async function fetchState() {
   if (!S.code) return;
   const mySeq = ++S.seq, code = S.code;
@@ -236,7 +212,7 @@ async function fetchState() {
     applyState(data);
   } catch (e) {
     const m = (e && e.message) || "";
-    if (/ROOM_NOT_FOUND|NOT_A_MEMBER/.test(m)) { leaveRoom(); S.homeError = errText(e); render(); return; }
+    if (/ROOM_NOT_FOUND|NOT_A_MEMBER/.test(m)) { leaveRoom(); S.homeError = ""; render(); return; }
     S.connOk = false; updateTop();
   }
 }
@@ -286,7 +262,6 @@ async function loadHistory(roundId) {
   try { S.history = await rpc("list_rounds", { p_code: S.code }); render(true); } catch (_) { S.history = null; }
 }
 function leaveRoom() {
-  closeEvents();
   S.code = null; S.st = null; S.applied = S.seq; 
   drop("gm_room"); 
   drop("gm_host_room");
@@ -373,7 +348,7 @@ function viewHome() {
 }
 async function enterRoom(code) {
   S.code = code; S.homeError = ""; save("gm_room", code); S.st = null;
-  subscribe(); await fetchState();
+  await fetchState();
 }
 
 /* --- Phòng chờ --- */
